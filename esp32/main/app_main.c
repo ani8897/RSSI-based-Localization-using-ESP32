@@ -19,12 +19,23 @@
 
 #include "esp_log.h"
 #include "mqtt_client.h"
+#include "sniffer.h"
 
 static const char *TAG = "LOCALIZATION";
 
 static EventGroupHandle_t wifi_event_group;
 const static int CONNECTED_BIT = BIT0;
-
+/* Filter out the common ESP32 MAC */
+static const uint8_t esp_module_mac[32][3] = {
+    {0x54, 0x5A, 0xA6}, {0x24, 0x0A, 0xC4}, {0xD8, 0xA0, 0x1D}, {0xEC, 0xFA, 0xBC},
+    {0xA0, 0x20, 0xA6}, {0x90, 0x97, 0xD5}, {0x18, 0xFE, 0x34}, {0x60, 0x01, 0x94},
+    {0x2C, 0x3A, 0xE8}, {0xA4, 0x7B, 0x9D}, {0xDC, 0x4F, 0x22}, {0x5C, 0xCF, 0x7F},
+    {0xAC, 0xD0, 0x74}, {0x30, 0xAE, 0xA4}, {0x24, 0xB2, 0xDE}, {0x68, 0xC6, 0x3A},
+};
+/* The device num in ten minutes */
+int s_device_info_num           = 0;
+station_info_t *station_info    = NULL;
+station_info_t *g_station_list  = NULL;
 
 static esp_err_t mqtt_event_handler(esp_mqtt_event_handle_t event)
 {
@@ -76,6 +87,64 @@ static esp_err_t mqtt_event_handler(esp_mqtt_event_handle_t event)
     return ESP_OK;
 }
 
+static inline uint32_t sniffer_timestamp()
+{
+    return xTaskGetTickCount() * (1000 / configTICK_RATE_HZ);
+}
+
+/* The callback function of sniffer */
+void wifi_sniffer_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type)
+{
+    wifi_promiscuous_pkt_t *sniffer = (wifi_promiscuous_pkt_t *)recv_buf;
+    sniffer_payload_t *sniffer_payload = (sniffer_payload_t *)sniffer->payload;
+
+    /* Check if the packet is Probo Request  */
+    if (sniffer_payload->header[0] != 0x40) {
+        return;
+    }
+
+    if (!g_station_list) {
+        g_station_list = malloc(sizeof(station_info_t));
+        g_station_list->next = NULL;
+    }
+
+    /* Check if there is enough memoory to use */
+    if (esp_get_free_heap_size() < 60 * 1024) {
+        s_device_info_num = 0;
+
+        for (station_info = g_station_list->next; station_info; station_info = g_station_list->next) {
+            g_station_list->next = station_info->next;
+            free(station_info);
+        }
+    }
+    /* Filter out some useless packet  */
+    for (int i = 0; i < 32; ++i) {
+        if (!memcmp(sniffer_payload->source_mac, esp_module_mac[i], 3)) {
+            return;
+        }
+    }
+    /* Traversing the chain table to check the presence of the device */
+    for (station_info = g_station_list->next; station_info; station_info = station_info->next) {
+        if (!memcmp(station_info->bssid, sniffer_payload->source_mac, sizeof(station_info->bssid))) {
+            return;
+        }
+    }
+    /* Add the device information to chain table */
+    if (!station_info) {
+        station_info = malloc(sizeof(station_info_t));
+        station_info->next = g_station_list->next;
+        g_station_list->next = station_info;
+    }
+
+    station_info->rssi = sniffer->rx_ctrl.rssi;
+    station_info->channel = sniffer->rx_ctrl.channel;
+    station_info->timestamp = sniffer_timestamp();
+    memcpy(station_info->bssid, sniffer_payload->source_mac, sizeof(station_info->bssid));
+    s_device_info_num++;
+    printf("\nCurrent device num = %d\n", s_device_info_num);
+    printf("MAC: 0x%02X.0x%02X.0x%02X.0x%02X.0x%02X.0x%02X, The time is: %d, The rssi = %d\n", station_info->bssid[0], station_info->bssid[1], station_info->bssid[2], station_info->bssid[3], station_info->bssid[4], station_info->bssid[5], station_info->timestamp, station_info->rssi);
+}
+
 static esp_err_t wifi_event_handler(void *ctx, system_event_t *event)
 {
     switch (event->event_id) {
@@ -84,7 +153,12 @@ static esp_err_t wifi_event_handler(void *ctx, system_event_t *event)
             break;
         case SYSTEM_EVENT_STA_GOT_IP:
             xEventGroupSetBits(wifi_event_group, CONNECTED_BIT);
-
+            if (!g_station_list) {
+                g_station_list = malloc(sizeof(station_info_t));
+                g_station_list->next = NULL;
+                ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(wifi_sniffer_cb));
+                ESP_ERROR_CHECK(esp_wifi_set_promiscuous(1));
+            }
             break;
         case SYSTEM_EVENT_STA_DISCONNECTED:
             esp_wifi_connect();
@@ -125,31 +199,6 @@ static void mqtt_app_start(void)
         .event_handle = mqtt_event_handler,
         // .user_context = (void *)your_context
     };
-
-#if CONFIG_BROKER_URL_FROM_STDIN
-    char line[128];
-
-    if (strcmp(mqtt_cfg.uri, "FROM_STDIN") == 0) {
-        int count = 0;
-        printf("Please enter url of mqtt broker\n");
-        while (count < 128) {
-            int c = fgetc(stdin);
-            if (c == '\n') {
-                line[count] = '\0';
-                break;
-            } else if (c > 0 && c < 127) {
-                line[count] = c;
-                ++count;
-            }
-            vTaskDelay(10 / portTICK_PERIOD_MS);
-        }
-        mqtt_cfg.uri = line;
-        printf("Broker url: %s\n", line);
-    } else {
-        ESP_LOGE(TAG, "Configuration mismatch: wrong broker url");
-        abort();
-    }
-#endif /* CONFIG_BROKER_URL_FROM_STDIN */
 
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
     esp_mqtt_client_start(client);
