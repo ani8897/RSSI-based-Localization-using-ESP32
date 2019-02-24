@@ -21,12 +21,15 @@
 #include "mqtt_client.h"
 #include "sniffer.h"
 
+#define LEN_MAC_ADDR 20
+
 static const char *TAG = "LOCALIZATION";
 const static int CONNECTED_BIT = BIT0;
 static EventGroupHandle_t wifi_event_group;
 
-char *TOPIC = NULL;
+char *RSSI_TOPIC = NULL, *CSI_TOPIC = NULL;
 station_info_t *station_info = NULL;
+char *rssi_data_json = NULL, *csi_data_json = NULL;
 esp_mqtt_client_handle_t client; 
 
 /* Filter out the common ESP32 MAC */
@@ -56,24 +59,69 @@ void wifi_sniffer_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type)
     }
 
     /* Map station information*/
-    if (!station_info) {
-        station_info = malloc(sizeof(station_info_t));
-    }
     memcpy(station_info->bssid, sniffer_payload->source_mac, sizeof(station_info->bssid));
     station_info->rssi = sniffer->rx_ctrl.rssi;
     station_info->channel = sniffer->rx_ctrl.channel;
 
     /* Create Json string for publishing*/
-    char *json_data = (char*)malloc(200 * sizeof(char));
-    sprintf(json_data, "{'MAC':'%02X:%02X:%02X:%02X:%02X:%02X','RSSI': %d,'Channel': %d}\n", 
+    
+    sprintf(rssi_data_json, "{'MAC':'%02X:%02X:%02X:%02X:%02X:%02X','RSSI': %d,'Channel': %d}\n", 
             station_info->bssid[0], station_info->bssid[1], station_info->bssid[2], station_info->bssid[3], station_info->bssid[4], station_info->bssid[5], station_info->rssi, station_info->channel);
-    printf(json_data);
+    printf(rssi_data_json);
 
-    esp_mqtt_client_publish(client, TOPIC, json_data, 0, 1, 0);
-    free(json_data);
-    free(station_info);
+    esp_mqtt_client_publish(client, RSSI_TOPIC, rssi_data_json, 0, 1, 0);
 }
 
+/* The callback function of CSI */
+void wifi_csi_cb(void *ctx, wifi_csi_info_t *data) {
+    wifi_csi_info_t received = data[0];
+    if(!received.first_word_invalid){
+
+        // char* buf = malloc(10*received.len*sizeof(char));        
+        // for(int i=0;i<received.len;i++){
+        //     char* x = malloc(10*sizeof(char));
+        //     sprintf(x,"%02x",received.buf[i]);
+        //     strcat(buf,x);
+        // }
+
+        sprintf(csi_data_json, "{'MAC':'%02X:%02X:%02X:%02X:%02X:%02X','Channel':%d,'Secondary Channel':%d,'Signal Mode':%d,'Channel Bandwidth':%d,'STBC':%d,'RSSI':%d,'Antenna':%d,'Length':%d,'Buffer':'%s'}\n", 
+            received.mac[0], received.mac[1], received.mac[2], received.mac[3], received.mac[4], received.mac[5],
+            received.rx_ctrl.channel,
+            received.rx_ctrl.secondary_channel, 
+            received.rx_ctrl.sig_mode,
+            received.rx_ctrl.cwb,
+            received.rx_ctrl.stbc,
+            received.rx_ctrl.rssi,
+            received.rx_ctrl.ant,
+            received.len,
+            "buf");
+
+        printf(csi_data_json);  
+
+        esp_mqtt_client_publish(client, CSI_TOPIC, csi_data_json, 0, 1, 0); 
+    }
+    
+}
+
+static void sniffer_and_csi_init(){
+    
+    ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(wifi_sniffer_cb));
+    ESP_ERROR_CHECK(esp_wifi_set_promiscuous(1));
+
+
+    ESP_ERROR_CHECK(esp_wifi_set_csi(1));
+    wifi_csi_config_t configuration_csi; // CSI = Channel State Information
+    configuration_csi.lltf_en = 1;
+    configuration_csi.htltf_en = 1;
+    configuration_csi.stbc_htltf2_en = 1;
+    configuration_csi.ltf_merge_en = 1;
+    configuration_csi.channel_filter_en = 1;
+    configuration_csi.manu_scale = 0; // Automatic scalling
+    //configuration_csi.shift=15; // 0->15
+    
+    ESP_ERROR_CHECK(esp_wifi_set_csi_config(&configuration_csi));
+    ESP_ERROR_CHECK(esp_wifi_set_csi_rx_cb(&wifi_csi_cb, NULL)); 
+}
 
 static esp_err_t mqtt_event_handler(esp_mqtt_event_handle_t event)
 {
@@ -81,8 +129,7 @@ static esp_err_t mqtt_event_handler(esp_mqtt_event_handle_t event)
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
-            ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(wifi_sniffer_cb));
-            ESP_ERROR_CHECK(esp_wifi_set_promiscuous(1));
+            sniffer_and_csi_init();
             break;
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
@@ -139,6 +186,7 @@ static void wifi_init(void)
     wifi_event_group = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_event_loop_init(wifi_event_handler, NULL));
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    cfg.csi_enable = 1; //Enable CSI
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     wifi_config_t wifi_config = {
@@ -155,16 +203,25 @@ static void wifi_init(void)
     xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
 }
 
-static void mqtt_app_start(void)
-{   
+static void variables_init(void){
     uint8_t mac[6];
     ESP_ERROR_CHECK(esp_wifi_get_mac(ESP_IF_WIFI_STA, mac));
 
-    TOPIC = (char*)malloc(50 * sizeof(char));
-    sprintf(TOPIC,"/loc/%02X:%02X:%02X:%02X:%02X:%02X",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+    RSSI_TOPIC = (char*)malloc(50 * sizeof(char));
+    CSI_TOPIC = (char*)malloc(50 * sizeof(char));
+    sprintf(RSSI_TOPIC,"/rssi/%02X:%02X:%02X:%02X:%02X:%02X",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+    sprintf(CSI_TOPIC,"/csi/%02X:%02X:%02X:%02X:%02X:%02X",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
 
-    ESP_LOGI(TAG, "TOPIC:[%s]", TOPIC);
+    ESP_LOGI(TAG, "RSSI_TOPIC:[%s]", RSSI_TOPIC);
+    ESP_LOGI(TAG, "CSI_TOPIC:[%s]", CSI_TOPIC);
 
+    station_info = malloc(sizeof(station_info_t));
+    rssi_data_json = (char*)malloc(200 * sizeof(char));
+    csi_data_json = (char*)malloc(1000 * sizeof(char));
+}
+
+static void mqtt_app_start(void)
+{   
     esp_mqtt_client_config_t mqtt_cfg = {
         .uri = CONFIG_BROKER_URL,
         .event_handle = mqtt_event_handler,
@@ -190,5 +247,6 @@ void app_main()
 
     nvs_flash_init();
     wifi_init();
+    variables_init();
     mqtt_app_start();
 }
