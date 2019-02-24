@@ -90,11 +90,11 @@ CONFIG_MONITOR_BAUD_OTHER_VAL=115200
 CONFIG_MONITOR_BAUD=115200
 
 #
-# Example Configuration
+# Experiment Configuration
 #
-CONFIG_WIFI_SSID="myssid"
-CONFIG_WIFI_PASSWORD="mypassword"
-CONFIG_BROKER_URL="mqtt://iot.eclipse.org"
+CONFIG_WIFI_SSID="Aniket OP6"
+CONFIG_WIFI_PASSWORD="12345678"
+CONFIG_BROKER_URL="mqtt://192.168.43.19:1883"
 
 #
 # Partition Table

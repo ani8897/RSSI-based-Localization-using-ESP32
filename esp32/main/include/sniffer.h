@@ -19,8 +19,6 @@ typedef struct station_info {
     uint8_t  bssid[6];
     int8_t   rssi;
     uint8_t  channel;
-    uint32_t timestamp;
-    struct   station_info *next;
 } station_info_t;
 
 #endif
