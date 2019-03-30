@@ -1,43 +1,79 @@
-import json
+import time
 import argparse
-import paho.mqtt.client as paho
+import threading
 
+import const
 
-def rssi_callback(client, userdata, message):
-	m = str(message.payload.decode("utf-8")).rstrip('\n').replace('\'','\"')
-	data = json.loads(m)
-	print(*data.items())
+from mqtt import *
+from util import *
 
-def csi_callback(client, userdata, message):
-	m = str(message.payload.decode("utf-8")).rstrip('\n').replace('\'','\"')
-	data = json.loads(m)
-	print(*data.items())
+from scipy.optimize import minimize
 
-def on_connect(client, userdata, flags, rc):
-	print("Connected to broker")
+def localize(rssi_data):
+	"""
+	Localizes devices based on the rssi data passed
+	"""
+	def loss(e, device_mac):
+		return sum([ ( dist(e, const.ANCHORS[a]) - rssi_model(rssi_data[a][device_mac])**2 )**2 for a in const.ANCHORS])
+
+	anchor_check = {}
+	for a in rssi_data:
+		for d in rssi_data[a]:
+
+			if d in anchor_check:
+				anchor_check[d].append(a)
+			else:
+				anchor_check[d] = [a]
+
+			if len(anchor_check[d]) == len(const.ANCHORS):
+				res = minimize(loss, get_position(d), args=(d))
+				const.positions[d] = (res.x, res.success)
+
 	
-	rssi_topic, csi_topic = "/rssi/#", "/csi/#"
-	client.subscribe(rssi_topic)
-	client.subscribe(csi_topic)
-	print("Subscribed to topics:[%s,%s]"%(rssi_topic,csi_topic))
+def data_listener():
+	"""
+	Listens to the queue filled up by MQTT listener
+	"""
+	rssi_data = {a: {} for a in const.ANCHORS}
 
-	client.message_callback_add(rssi_topic, rssi_callback)
-	client.message_callback_add(csi_topic, csi_callback)
+	while True:
 
-def connect(broker_ip, broker_port):
-	client= paho.Client("Localization listener") 
-	client.on_connect = on_connect
+		base_time = time.time()
 
-	client.connect(broker_ip,broker_port)
+		while time.time() - base_time < 5:
+			anchor_mac, device_mac, rssi = const.data_queue.get()
+			
+			if device_mac in rssi_data:
+				rssi_data[anchor_mac].append(rssi) 
+			else:
+				rssi_data[anchor_mac][device_mac] = [rssi]
 
-	client.loop_forever()
+		for a in rssi_data:
+			for d in rssi_data[a]:
+				rssi_data[a][d] = (1. * sum(rssi_data[a][d])) / len(rssi_data[a][d])
+
+		localize(rssi_data)
+		rssi_data = {a: {} for a in const.ANCHORS}
+		print_positions()
+
+def print_positions():
+	"""
+	Prints positions of the devices encountered so far
+	"""	
+	for device_mac in const.positions:
+		print(device_mac, *const.positions[device_mac][0], const.positions[device_mac][1])
+	print()
+
 
 if __name__ == '__main__':
 	
 	parser = argparse.ArgumentParser()
 	parser.add_argument("-i","--host", type=str, help="Host IP of broker", required=True)
-	parser.add_argument("-p","--port", type=int, help="Port", required=True )
+	parser.add_argument("-p","--port", type=int, help="Port", required=True)
 
 	args = parser.parse_args()
 
-	connect(args.host, args.port)
+	mqtt_thread = threading.Thread(target=connect, args=(args.host, args.port))
+	mqtt_thread.start()
+
+	data_listener()
