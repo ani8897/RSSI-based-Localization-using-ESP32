@@ -38,6 +38,14 @@ static const uint8_t esp_module_mac[32][3] = {
     {0xA0, 0x20, 0xA6}, {0x90, 0x97, 0xD5}, {0x18, 0xFE, 0x34}, {0x60, 0x01, 0x94},
     {0x2C, 0x3A, 0xE8}, {0xA4, 0x7B, 0x9D}, {0xDC, 0x4F, 0x22}, {0x5C, 0xCF, 0x7F},
     {0xAC, 0xD0, 0x74}, {0x30, 0xAE, 0xA4}, {0x24, 0xB2, 0xDE}, {0x68, 0xC6, 0x3A},
+    // my macs
+    {0x64, 0xA2, 0xF9}, {0xAC, 0xD1, 0xB8}, {0xC4,0x8E,0x8F},
+};
+
+static const uint8_t allowed_macs[4][3] = {
+    // my macs
+    {0x4C, 0xED, 0xFB}, {0xB8, 0x63, 0x4D},
+    //{0xC4,0x8E,0x8F},
 };
 
 /* The callback function of sniffer */
@@ -46,18 +54,29 @@ void wifi_sniffer_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type)
     wifi_promiscuous_pkt_t *sniffer = (wifi_promiscuous_pkt_t *)recv_buf;
     sniffer_payload_t *sniffer_payload = (sniffer_payload_t *)sniffer->payload;
 
-    /* Check if the packet is Probe Request */
-    if (sniffer_payload->header[0] != 0x40) {
-        return;
-    }
+    // /* Check if the packet is Probe Request */
+    // if (sniffer_payload->header[0] == 0x40) {
+    //     return;
+    // }
+    // static const uint8_t aniket_mobile[3] = {0x64, 0xA2, 0xF9};
+    // if(!memcmp(sniffer_payload->source_mac, aniket_mobile, 3)) return;
 
-    /* Filter out some useless packet */
-    for (int i = 0; i < 32; ++i) {
-        if (!memcmp(sniffer_payload->source_mac, esp_module_mac[i], 3)) {
-            return;
+    // /* Filter out some useless packet */
+    // for (int i = 0; i < 32; ++i) {
+    //     if (!memcmp(sniffer_payload->source_mac, esp_module_mac[i], 3)) {
+    //         return;
+    //     }
+    // }
+
+    /* Filter in useful packet */
+    bool match = false;
+    for (int i = 0; i < 4; ++i) {
+        if (!memcmp(sniffer_payload->source_mac, allowed_macs[i], 3)) {
+            match = true;
         }
     }
-
+    if(!match)
+        return;
     /* Map station information*/
     memcpy(station_info->bssid, sniffer_payload->source_mac, sizeof(station_info->bssid));
     station_info->rssi = sniffer->rx_ctrl.rssi;
@@ -65,8 +84,8 @@ void wifi_sniffer_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type)
 
     /* Create Json string for publishing*/
     
-    sprintf(rssi_data_json, "{'MAC':'%02X:%02X:%02X:%02X:%02X:%02X','RSSI': %d,'Channel': %d}\n", 
-            station_info->bssid[0], station_info->bssid[1], station_info->bssid[2], station_info->bssid[3], station_info->bssid[4], station_info->bssid[5], station_info->rssi, station_info->channel);
+    sprintf(rssi_data_json, "{'MAC':'%02X:%02X:%02X:%02X:%02X:%02X','RSSI': %d,'Channel': %d,'Header':'%02X'}\n", 
+            station_info->bssid[0], station_info->bssid[1], station_info->bssid[2], station_info->bssid[3], station_info->bssid[4], station_info->bssid[5], station_info->rssi, station_info->channel, sniffer_payload->header[0]);
     printf(rssi_data_json);
 
     esp_mqtt_client_publish(client, RSSI_TOPIC, rssi_data_json, 0, 1, 0);
