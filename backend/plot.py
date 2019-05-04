@@ -1,11 +1,13 @@
+"""
+Code for visualizing the locations of target nodes
+"""
+
 import plotly
 import plotly.graph_objs as go
 import numpy as np
 
 import const
 
-# x_detectors = [-4 , 0 , 4]
-# y_detectors = [4 , -4 , 4]
 xypairs = list(const.ANCHORS.values())
 x_detectors = [xy[0] for xy in xypairs]
 y_detectors = [xy[1] for xy in xypairs]
@@ -14,11 +16,8 @@ colors = [0.1,0.1,0.1]
 
 def plot_heatmap(pos=[[5,5,5]]):
 
-    # print(const.positions.keys())
-    # print(pos)
     if(len(pos)==0):
         return
-    return
 
     points_distances = pos
     trace0 = go.Scatter(
@@ -36,7 +35,6 @@ def plot_heatmap(pos=[[5,5,5]]):
     shapes = []
     for point_distances in points_distances:
     	for i,radii in enumerate(point_distances):
-    		# print(i,radii)
     		x_i = x_detectors[i]
     		y_i = y_detectors[i]
     		shapes.append({
@@ -70,16 +68,3 @@ def plot_heatmap(pos=[[5,5,5]]):
     }
 
     plotly.offline.plot(fig, auto_open=True)
-
-
-
-
-# fig.add_scatter(x=x,
-#                 y=y,
-#                 mode='markers',
-#                 marker={'size': sz,
-#                         'color': colors,
-#                         'opacity': 0.6,
-#                         'colorscale': 'Viridis'
-#                        });
-

@@ -47,21 +47,21 @@ def data_listener(x,y):
 			if device_mac in rssi_data[anchor_mac]:
 				rssi_data[anchor_mac][device_mac].append(rssi) 
 			else:
-				# if device_mac == "74:29:AF:FB:13:39":
+				## Filtering out target nodes
 				if device_mac == "4C:ED:FB:50:16:ED" or device_mac == "B8:63:4D:A2:0E:13":
 					rssi_data[anchor_mac][device_mac] = [rssi]
 
 		for a in rssi_data:
 			for d in rssi_data[a]:
-				# print(rssi_data[a][d])
 				rssi_data[a][d] = round((1. * sum(rssi_data[a][d])) / len(rssi_data[a][d]),1)
 
-		# print("Dict: ",rssi_data)
+		## Printing Summary of the RSSI values received
 		for anchor_mac in rssi_data:
 			print("Summary: ", anchor_mac,int(dist(const.ANCHORS[anchor_mac], [x,y])), rssi_data[anchor_mac])
-		# localize(rssi_data)
+		
+		localize(rssi_data)
 		rssi_data = {a: {} for a in const.ANCHORS}
-		# print_positions()
+		print_positions()
 
 def print_positions():
 	"""
@@ -79,8 +79,9 @@ if __name__ == '__main__':
 	parser.add_argument("-i","--host", type=str, help="Host IP of broker", required=True)
 	parser.add_argument("-p","--port", type=int, help="Port", required=True)
 
-	parser.add_argument("-x", "--x", type=int)
-	parser.add_argument("-y", "--y", type=int)
+	## Useful in building the path loss model
+	parser.add_argument("-x", "--x", type=int, default=560)
+	parser.add_argument("-y", "--y", type=int, default=300)
 
 	args = parser.parse_args()
 

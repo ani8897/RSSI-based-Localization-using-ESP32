@@ -38,14 +38,13 @@ static const uint8_t esp_module_mac[32][3] = {
     {0xA0, 0x20, 0xA6}, {0x90, 0x97, 0xD5}, {0x18, 0xFE, 0x34}, {0x60, 0x01, 0x94},
     {0x2C, 0x3A, 0xE8}, {0xA4, 0x7B, 0x9D}, {0xDC, 0x4F, 0x22}, {0x5C, 0xCF, 0x7F},
     {0xAC, 0xD0, 0x74}, {0x30, 0xAE, 0xA4}, {0x24, 0xB2, 0xDE}, {0x68, 0xC6, 0x3A},
-    // my macs
+    // MAC IDs of host laptop and mobile hotspot
     {0x64, 0xA2, 0xF9}, {0xAC, 0xD1, 0xB8}, {0xC4,0x8E,0x8F},
 };
 
 static const uint8_t allowed_macs[4][3] = {
-    // my macs
+    // Target Nodes
     {0x4C, 0xED, 0xFB}, {0xB8, 0x63, 0x4D},
-    //{0xC4,0x8E,0x8F},
 };
 
 /* The callback function of sniffer */
@@ -54,19 +53,12 @@ void wifi_sniffer_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type)
     wifi_promiscuous_pkt_t *sniffer = (wifi_promiscuous_pkt_t *)recv_buf;
     sniffer_payload_t *sniffer_payload = (sniffer_payload_t *)sniffer->payload;
 
-    // /* Check if the packet is Probe Request */
-    // if (sniffer_payload->header[0] == 0x40) {
-    //     return;
-    // }
-    // static const uint8_t aniket_mobile[3] = {0x64, 0xA2, 0xF9};
-    // if(!memcmp(sniffer_payload->source_mac, aniket_mobile, 3)) return;
-
-    // /* Filter out some useless packet */
-    // for (int i = 0; i < 32; ++i) {
-    //     if (!memcmp(sniffer_payload->source_mac, esp_module_mac[i], 3)) {
-    //         return;
-    //     }
-    // }
+    /* Filter out some useless packet */
+    for (int i = 0; i < 32; ++i) {
+        if (!memcmp(sniffer_payload->source_mac, esp_module_mac[i], 3)) {
+            return;
+        }
+    }
 
     /* Filter in useful packet */
     bool match = false;
@@ -75,8 +67,8 @@ void wifi_sniffer_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type)
             match = true;
         }
     }
-    if(!match)
-        return;
+    if(!match) return;
+
     /* Map station information*/
     memcpy(station_info->bssid, sniffer_payload->source_mac, sizeof(station_info->bssid));
     station_info->rssi = sniffer->rx_ctrl.rssi;
@@ -91,7 +83,9 @@ void wifi_sniffer_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type)
     esp_mqtt_client_publish(client, RSSI_TOPIC, rssi_data_json, 0, 1, 0);
 }
 
-/* The callback function of CSI */
+/* The callback function of CSI (not functional)
+Please refer this: https://github.com/espressif/esp-idf/blob/master/docs/en/api-guides/wifi.rst#wi-fi-channel-state-information
+*/
 void wifi_csi_cb(void *ctx, wifi_csi_info_t *data) {
     wifi_csi_info_t received = data[0];
     if(!received.first_word_invalid){
@@ -135,8 +129,7 @@ static void sniffer_and_csi_init(){
     configuration_csi.stbc_htltf2_en = 1;
     configuration_csi.ltf_merge_en = 1;
     configuration_csi.channel_filter_en = 1;
-    configuration_csi.manu_scale = 0; // Automatic scalling
-    //configuration_csi.shift=15; // 0->15
+    configuration_csi.manu_scale = 0; 
     
     ESP_ERROR_CHECK(esp_wifi_set_csi_config(&configuration_csi));
     ESP_ERROR_CHECK(esp_wifi_set_csi_rx_cb(&wifi_csi_cb, NULL)); 
@@ -144,7 +137,6 @@ static void sniffer_and_csi_init(){
 
 static esp_err_t mqtt_event_handler(esp_mqtt_event_handle_t event)
 {
-    // your_context_t *context = event->context;
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
@@ -244,7 +236,6 @@ static void mqtt_app_start(void)
     esp_mqtt_client_config_t mqtt_cfg = {
         .uri = CONFIG_BROKER_URL,
         .event_handle = mqtt_event_handler,
-        // .user_context = (void *)your_context
     };
 
     client = esp_mqtt_client_init(&mqtt_cfg);
